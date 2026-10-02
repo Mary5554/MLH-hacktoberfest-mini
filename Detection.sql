@@ -75,34 +75,3 @@ SELECT *
 FROM FORECAST_RESULTS 
 ORDER BY WEEK_START ASC, CITY ASC;
 
--- 1. Create a cleaned training view that turns NULLs into 0
-CREATE OR REPLACE VIEW STATE_FC_TRAIN_CLEAN_V AS
-SELECT 
-    CITY AS SERIES, 
-    WEEK_START::TIMESTAMP_NTZ AS TS, 
-    COALESCE(CASES, 0)::FLOAT AS Y -- Fixes the NULL bug by treating missing weeks as 0 cases
-FROM STATE_WEEKLY;
-
--- 2. Retrain the model on the clean data
-CREATE OR REPLACE SNOWFLAKE.ML.FORECAST STATE_FORECAST_MODEL_V2(
-  INPUT_DATA => SYSTEM$REFERENCE('VIEW', 'STATE_FC_TRAIN_CLEAN_V'),
-  SERIES_COLNAME => 'SERIES',
-  TIMESTAMP_COLNAME => 'TS',
-  TARGET_COLNAME => 'Y'
-);
-
--- 3. Run the forecast 
-CALL STATE_FORECAST_MODEL_V2!FORECAST(
-  FORECASTING_PERIODS => 8,
-  CONFIG_OBJECT => {'prediction_interval': 0.9}
-);
-
--- 4. Overwrite your results table and force a mathematical floor of 0
-CREATE OR REPLACE TABLE FORECAST_RESULTS AS
-SELECT 
-    SERIES::STRING AS CITY, 
-    TS::DATE AS WEEK_START, 
-    GREATEST(0, ROUND(FORECAST)) AS FORECAST,      -- Force negative predictions to 0
-    GREATEST(0, ROUND(LOWER_BOUND)) AS LOWER_BOUND, -- Fixes negative safety ranges
-    GREATEST(0, ROUND(UPPER_BOUND)) AS UPPER_BOUND
-FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
